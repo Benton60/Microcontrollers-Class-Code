@@ -1,0 +1,417 @@
+/*
+ * LabI2C.c
+ * Author : elhershberger21
+ */ 
+
+#define F_CPU 16000000L
+#include <avr/interrupt.h>
+#include <avr/io.h>
+#include <util/delay.h>
+
+void ERROR (void);
+void send_start (void);
+void send_stop (void);
+void send_data (uint8_t datum);
+void send_command (uint8_t cmnd);
+void init_display(void);
+void clear_display(void);
+void send_info (uint8_t info);
+void set_col_addr(uint8_t col_start, uint8_t col_stop);
+void set_page_addr(uint8_t page_start, uint8_t page_stop);
+void print_pre_data();
+void show_num(int num, int line);
+int change_ADC_to_degrees(uint16_t adc_value);
+
+const int num_length = 66;
+uint8_t Numbers_Top[num_length] = {
+						   0xfc, 0xfe, 0x06, 0x06, 0xfe, 0xfc,
+						   0x00, 0x08, 0xfc, 0xfe, 0x00, 0x00,
+						   0x3c, 0x06, 0x06, 0x06, 0x06, 0xfc,
+						   0x06, 0x86, 0x86, 0x86, 0xfe, 0x7c,
+						   0xfe, 0xfe, 0x80, 0x80, 0xfe, 0xfe,
+						   0xfe, 0xfe, 0xc6, 0xc6, 0x86, 0x06,
+						   0xfc, 0xfe, 0x86, 0x86, 0x8e, 0x0c,
+						   0x06, 0x06, 0x06, 0x06, 0xfe, 0xfe,
+						   0x7c, 0xfe, 0x86, 0x86, 0xfe, 0x7c,
+						   0xfc, 0xfe, 0x86, 0x86, 0xfe, 0xfc,
+						   0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+						  }; 
+uint8_t Numbers_Bot[num_length] = {
+						   0x3f, 0x7f, 0x60, 0x60, 0x7f, 0x3f,
+						   0x60, 0x60, 0x7f, 0x7f, 0x60, 0x60,
+						   0x60, 0x70, 0x78, 0x6c, 0x66, 0x63,
+						   0x60, 0x60, 0x60, 0x60, 0x7f, 0x3f,
+						   0x00, 0x00, 0x00, 0x00, 0x7f, 0x7f,
+						   0x30, 0x60, 0x60, 0x60, 0x7f, 0x3f,
+						   0x3f, 0x7f, 0x61, 0x61, 0x7f, 0x3f,
+						   0x00, 0x00, 0x78, 0x7f, 0x07, 0x00,
+						   0x3f, 0x7f, 0x61, 0x61, 0x7f, 0x37,
+						   0x30, 0x71, 0x61, 0x61, 0x7f, 0x3f,
+						   0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+						  };
+						  
+						  
+						  
+						  
+int main(void)
+{
+		
+	//setting up display
+    DDRB|=(1<<DDRB5);
+	TWBR0=16;
+	TWSR0 |= (1<<TWPS1);   //Adding a pre-scaler of 16 Gives SCL of 250 kHz
+    init_display();
+	clear_display();
+	print_pre_data();
+	//
+	
+	
+	//setting up the ADC
+	ADCSRA |= (1<<ADPS2) | (1<<ADPS1) | (1<<ADPS0); //sets the pre-scalar = 128 for a 125 khz signal
+	ADMUX |= (1<<ADLAR); //left shift
+	ADCSRA |= (1<<ADIE); //enable ADC interrupts
+	ADCSRA |= (1<<ADEN); //enable ADC
+	ADMUX |= (1<<REFS0); //ties it to five volts
+	sei();
+	ADCSRA |= (1<< ADSC); //start conversion (single conversion)	
+	//
+
+
+	//setting up the servo
+	// Set PB1 (OC1A, Arduino Pin 9) as output
+	DDRB |= (1 << PB1);
+	TCCR1A = (1 << COM1A1) | (1 << WGM11);
+	TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS11) | (1 << CS10);  // Prescaler = 64
+	ICR1 = 5000;  // 20 ms period
+	//
+	
+	
+    while (1) 
+    {
+		
+    }
+}
+
+
+
+
+
+
+
+
+void move_servo(int degree){
+
+	
+	int bot = 350; // 0 degrees
+	int top = 900; // 180 degrees
+	
+	OCR1A = bot + degree * ((top-bot)/180);
+}
+
+
+
+
+
+//these are accelerometer and screen functions
+
+
+//num is the num you want to show including negatives, line is which line to show it on x = 0, y = 2;
+void show_num(int num, int line){
+	
+	if(num > 99 || num < -99){
+		return;
+	}
+	int x_offset = 74; //this variable specifies where to begin printing numbers
+	
+	
+	//if number is negative then print a minus sign. also move x_offset over to ovoid overwriting minus sign
+	if(num < 0){ 
+		//this prints the - sign
+		set_col_addr(x_offset, 0xff);
+		set_page_addr(line, 0x01 + line);
+		for(int i = 0; i < 5; i++){
+			send_info(0xc0);
+		}
+		send_info(0x00); //clear one space between the - and number
+		
+		
+		//this clears the space below the - sign
+		set_col_addr(x_offset, 0xff);
+		set_page_addr(0x01+ line, 0x02 + line);
+		for(int i = 0; i < 5; i++){
+			send_info(0x00);
+		}
+		send_info(0x00); //clear one space between the - and number
+		
+		
+		x_offset += 6; //move the "cursor" over six pixels 
+		num *= -1; //flip back to positive
+	}
+	
+	int msd = num/10;   //find each digit
+	int lsd = num%10;
+	
+	if(msd == 0){
+		msd = lsd;
+		lsd = 10;
+	}
+	
+	//FIRST DIGIT
+	//printing the top half
+	set_col_addr(x_offset, 0xff);
+	set_page_addr(line, 0x01 + line);          //adding line moves it up or down based on which line x/y is chosen
+	for(int i = 0; i < 6; i++){
+		send_info(Numbers_Top[msd*6+i]);
+	}
+	send_info(0x00); // inserts a space between digits
+	
+	//printing the bottom half
+	set_col_addr(x_offset, 0xff);
+	set_page_addr(0x01 + line, 0x02 + line);
+	for(int i = 0; i < 6; i++){
+		send_info(Numbers_Bot[msd*6+i]);
+	}
+	send_info(0x00); // inserts a space between digits
+	
+	
+	//SECOND DIGIT
+	send_info(0x00); //insert a clear line between digits
+	x_offset += 7; // shift the offset over to avoid overwriting the previous number
+	set_col_addr(x_offset, 0xff);
+	set_page_addr(line, 0x01 + line);
+	for(int i = 0; i < 6; i++){
+		send_info(Numbers_Top[lsd*6+i]);
+	}
+	send_info(0x00); // inserts a space between digits
+	
+	//printing the bottom half
+	set_col_addr(x_offset, 0xff);
+	set_page_addr(0x01 + line, 0x02 + line);
+	for(int i = 0; i < 6; i++){
+		send_info(Numbers_Bot[lsd*6+i]);
+	}
+	send_info(0x00); // inserts a space between digits
+	
+	
+	
+	//Clearing the excess screen
+	send_info(0x00); //insert a clear line between digits
+	x_offset += 7; // shift the offset over to avoid overwriting the previous number
+	set_col_addr(x_offset, 0xff);
+	set_page_addr(line, 0x01 + line);
+	for(int i = 0; i < 6; i++){
+		send_info(0x00);
+	}
+	send_info(0x00); // inserts a space between digits
+	
+	//printing the bottom half
+	set_col_addr(x_offset, 0xff);
+	set_page_addr(0x01 + line, 0x02 + line);
+	for(int i = 0; i < 6; i++){
+		send_info(0x00);
+	}
+	send_info(0x00); // inserts a space between digits
+}
+
+void print_pre_data (){
+	int length = 73;
+	uint8_t X_Letters_Top[length] = {
+		0x00, 0x02, 0x02, 0x06, 0x0e, 0x1e, 0x72, 0xe2, 0xc0, 0x40, 0x22, 0x1a, 0x0e, 0x06, 0x02, 0x02, 0x00,	//X
+		0x00, 0x00, 0x00, 0x00, 0x00,																			//
+		0x20, 0x60, 0xe0, 0xa0, 0x20, 0x00, 0x00, 0x20, 0xe0, 0x20, 0x00, 										//v
+		0xc0, 0xe0, 0x20, 0x20, 0x20, 0xe0, 0xc0, 0x00, 0x00,													//a
+		0x04, 0xfe, 0xfe, 0x00, 0x00,																			//l
+		0xe0, 0xe0, 0x00, 0x00, 0x00, 0x00, 0xe0, 0xe0, 0x00, 0x00,												//u
+		0x80, 0xc0, 0x60, 0x20, 0x20, 0x60, 0xc0, 0x80, 0x00,													//e
+		0x00, 0x30, 0x30, 0x00, 0x00};																			//:
+	
+	
+	uint8_t X_Letters_Bot[length] = {
+		0x00, 0x40, 0x40, 0x60, 0x70, 0x58, 0x0c, 0x02, 0x03, 0x07, 0x4e, 0x78, 0x70, 0x60, 0x40, 0x40, 0x00,	//X
+		0x00, 0x00, 0x00, 0x00, 0x00,																			//
+		0x00, 0x00, 0x03, 0x1f, 0x7c, 0x60, 0x18, 0x07, 0x00, 0x00, 0x00, 										//v
+		0x38, 0x7c, 0x46, 0x42, 0x21, 0x7f, 0x7f, 0x40, 0x00,													//a
+		0x40, 0x7f, 0x7f, 0x40, 0x00,																			//l
+		0x3f, 0x7f, 0x40, 0x40, 0x40, 0x20, 0x7f, 0x7f, 0x20, 0x00,												//u
+		0x1f, 0x3f, 0x71, 0x61, 0x61, 0x61, 0x21, 0x11, 0x00,													//e
+		0x00, 0x03, 0x03, 0x00, 0x00};																			//:
+	
+	uint8_t Y_Letters_Top[length] = {
+		0x00, 0x02, 0x02, 0x06, 0x0e, 0x1e, 0x72, 0xe2, 0x80, 0x00, 0xc0, 0x22, 0x1a, 0x06, 0x02, 0x02, 0x00,  //Y
+		0x00, 0x00, 0x00, 0x00, 0x00,																			//
+		0x20, 0x60, 0xe0, 0xa0, 0x20, 0x00, 0x00, 0x20, 0xe0, 0x20, 0x00, 										//v
+		0xc0, 0xe0, 0x20, 0x20, 0x20, 0xe0, 0xc0, 0x00, 0x00,													//a
+		0x04, 0xfe, 0xfe, 0x00, 0x00,																			//l
+		0xe0, 0xe0, 0x00, 0x00, 0x00, 0x00, 0xe0, 0xe0, 0x00, 0x00,												//u
+		0x80, 0xc0, 0x60, 0x20, 0x20, 0x60, 0xc0, 0x80, 0x00,													//e
+		0x00, 0x30, 0x30, 0x00, 0x00};																			//:
+	
+	uint8_t Y_Letters_Bot[length] = {
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x40, 0x7f, 0x7f, 0x40, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,	//Y
+		0x00, 0x00, 0x00, 0x00, 0x00,																			//
+		0x00, 0x00, 0x03, 0x1f, 0x7c, 0x60, 0x18, 0x07, 0x00, 0x00, 0x00, 										//v
+		0x38, 0x7c, 0x46, 0x42, 0x21, 0x7f, 0x7f, 0x40, 0x00,													//a
+		0x40, 0x7f, 0x7f, 0x40, 0x00,																			//l
+		0x3f, 0x7f, 0x40, 0x40, 0x40, 0x20, 0x7f, 0x7f, 0x20, 0x00,												//u
+		0x1f, 0x3f, 0x71, 0x61, 0x61, 0x61, 0x21, 0x11, 0x00,													//e
+		0x00, 0x03, 0x03, 0x00, 0x00};																			//:
+	
+	
+	
+	set_col_addr(0x00, 0xff);
+	set_page_addr(0x00, 0x01);
+	for(int i = 0; i < length; i++){
+		send_info(X_Letters_Top[i]);
+	}
+	
+	set_col_addr(0x00, 0xff);
+	set_page_addr(0x01, 0x02);
+	for(int i = 0; i < length; i++){
+		send_info(X_Letters_Bot[i]);
+	}
+	
+	set_col_addr(0x00, 0xff);
+	set_page_addr(0x02, 0x03);
+	for(int i = 0; i < length; i++){
+		send_info(Y_Letters_Top[i]);
+	}
+	
+	set_col_addr(0x00, 0xff);
+	set_page_addr(0x03, 0x04);
+	for(int i = 0; i < length; i++){
+		send_info(Y_Letters_Bot[i]);
+	}
+}
+
+int change_ADC_to_degrees(uint16_t adc_value) {
+	
+	
+	uint16_t adc_min = 262; // -90 degrees
+	uint16_t adc_max = 399; // 90 degrees
+
+	if(adc_value < adc_min) adc_value = adc_min;
+	if(adc_value > adc_max) adc_value = adc_max;
+
+	int degrees = -90 + ((adc_value - adc_min) * 180 + (adc_max - adc_min)/2) / (adc_max - adc_min);
+	return degrees;
+}
+
+ISR(ADC_vect){
+	uint8_t low = ADCL;
+	uint8_t high = ADCH;
+	
+	uint16_t adc_value = (high << 2) | (low >> 6);
+	switch(ADMUX & 0x0F){
+		case 0:
+		move_servo(change_ADC_to_degrees(adc_value));
+		show_num(change_ADC_to_degrees(adc_value), 0);
+		ADMUX = (ADMUX & 0xF0) | 1;        // switch to ADC1
+		break;
+		
+		case 1:
+		show_num(change_ADC_to_degrees(adc_value), 2);
+		ADMUX = (ADMUX & 0xF0) | 0;        // switch to ADC0
+		break;
+	}
+	ADCSRA |= (1<<ADSC); // start next conversion
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+//all i2c functions i didnt modify
+
+void send_start ()
+{
+	PORTB &= 0xDF;
+	TWCR0 = (1<<TWINT)|(1<<TWSTA)|(1<<TWEN);   //Send start condition.
+	while (!(TWCR0 & (1<<TWINT)));   //Wait for TWINT flag set.  Indicates the START condition has been sent.
+	if ((TWSR0 & 0xF8) != 0x08) //Check TWI status register.  If different from START (0x08 for send START) go to ERROR.
+	ERROR();
+	TWDR0 = 0x78;   //Load SLA_W into TWDR register.  Note SLA is 0x3C and write bit is 0.  SLA + W is 0x78.
+	TWCR0 = (1<<TWINT)|(1<<TWEN);   //Clear TWINT bit in TWCR to start transmission of address.
+	while (!(TWCR0 & (1<< TWINT)));   //Wait for SLA+W has been transmitted, and ACK/NACK has been received.
+	if ((TWSR0 & 0xF8) != 0x18)   //Check value of TWI status register.  Mask pre-scaler bits (0x18 for the address being sent and ACK returned).  If status different from MT_SLA_ACK go to ERROR.
+	ERROR();
+}
+
+void send_command (uint8_t y){
+	send_start ();
+	send_data (0x00);
+	send_data (y);
+	send_stop ();
+}
+
+void send_data (uint8_t x){
+	TWDR0 = x ;   //Load DATA into TWDR register.  0x4C is an L in ASCII code.
+	TWCR0 = (1<< TWINT)|(1<< TWEN);   //Clear TWINT bit in TWCR to start transmission of data.
+	while (!( TWCR0 & (1<< TWINT)));   //Wait for TWINT flag set.  This indicates that the DATA has been transmitted, and ACK/NACK has been received.
+	if ((TWSR0 & 0xF8) != 0x28)   //Check value of TWI status register.  Mask pre-scaler bits.  If status different from MT_DATA_ACK go to ERROR.  0x28 is data received and ACK sent.
+	ERROR();
+}
+
+void send_stop (){
+	TWCR0 = (1<< TWINT)|(1<<TWEN)|(1<<TWSTO);   //Transmit STOP condition
+}
+
+void init_display(){
+	send_command(0xA8);  //Set MUX ratio
+	send_command(0x3F);  //Set MUX ratio, 0x1F for 128x32 and 0x3F for 128x64
+	send_command(0xD3);  //Set Display Offset
+	send_command(0x00);  //Set Display Offset
+	send_command(0x40);  //Set Display Start Line
+	send_command(0x20);  //Set Display Mode to Horizontal
+	send_command(0x00);  //Set Display Mode to Horizontal
+	send_command(0xA1);  //Set Segment Re-map
+	send_command(0xC8);  //Set COM Output Scan Direction
+	send_command(0xDA);  //Set COM Pins hardware configuration
+	send_command(0x12);  //Set COM Pins hardware configuration, 0x02 for 128x32 and 0x12 for 128x64
+	send_command(0x81);  //Set Contrast Control
+	send_command(0x9F);  //Set Contrast Control Value from 0x00 to 0xFF minimum to maximum
+	send_command(0xA4);  //Disable Entire Display
+	send_command(0xA6);  //Set Normal Display
+	send_command(0xD5);  //Set Oscillation Frequency
+	send_command(0x80);  //Set Oscillation Frequency
+	send_command(0x8D);  //Enable Charge Pump Regulator
+	send_command(0x14);  //Enable Charge Pump Regulator
+	send_command(0xAF);  //Turn Display On
+}
+
+void clear_display(void){
+	for (int count=0; count<1024; count++){
+		send_info(0x00);
+	}
+}
+
+void send_info (uint8_t y){
+	send_start ();
+	send_data (0x40);
+	send_data (y);
+	send_stop ();
+}
+
+void set_col_addr(uint8_t col_begin, uint8_t col_end){
+	send_command(0x21);
+	send_command(col_begin);
+	send_command(col_end);
+	
+}
+
+void set_page_addr(uint8_t page_begin, uint8_t page_end){
+	send_command(0x22);
+	send_command(page_begin);
+	send_command(page_end);
+}
+
+void ERROR (){
+	//PORTB |= (1<<PORTB5);
+}
